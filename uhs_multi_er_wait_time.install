@@ -1,0 +1,35 @@
+<?php
+/**
+ * @file
+ * Install file for Multi ER Wait Time
+ */
+
+function uhs_multi_er_wait_time_enable() {
+  variable_set('multi_er_service_url', '--removed--');
+  variable_set('multi_er_service_token', '--removed--');
+  variable_set('multi_er_hide_threshold', 15);
+  variable_set('multi_er_list_display', 'list');
+  variable_set('multi_er_legend_waittime_marker_desc', 'Emergency room location current wait time');
+  variable_set('multi_er_legend_nonwaittime_marker_desc', 'Non-ER location, wait time not available');
+  variable_set('multi_er_search_intro', '');
+  variable_set('multi_er_search_title', 'Our Facilities');
+  variable_set('multi_er_sticky_disclaimer', [
+    'value' => '<p>If you are having a medical emergency, call 9-1-1. For accurate wait time, call the hospital.</p>',
+    'format' => 'full_html',
+    ]
+  );
+  variable_set('gmap_marker_custom_dir', 'sites/all/modules/custom/uhs_multi_er_wait_time/custom_markers');
+}
+
+function uhs_multi_er_wait_time_uninstall() {
+  variable_del('multi_er_service_url');
+  variable_del('multi_er_service_token');
+  variable_del('multi_er_hide_threshold');
+  variable_del('multi_er_list_display');
+  variable_del('multi_er_legend_waittime_marker_desc');
+  variable_del('multi_er_legend_nonwaittime_marker_desc');
+  variable_del('multi_er_search_intro');
+  variable_del('multi_er_search_title');
+  variable_del('multi_er_sticky_disclaimer');
+  variable_del('gmap_marker_custom_dir');
+}

@@ -1,0 +1,16 @@
+; Defaults
+[defaults]
+; Note: An empty shadow property will break IE.
+; Leave it commented out if you aren't supplying an image.
+;shadow = ""
+anchorX = 16
+anchorY = 16
+infoX = 8
+infoY = 8
+
+; Marker sets
+[hd_bike_crash]
+name = "HD MWC Bike Crash"
+sequence = "bike_crash_small.png"
+
+; Files

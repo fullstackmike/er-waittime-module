@@ -1,0 +1,1524 @@
+<?php
+/**
+ * @file
+ * Code for the UHS Multi ER Wait Time feature and beyond
+ */
+
+//feature definition
+include_once 'uhs_multi_er_wait_time.features.inc';
+
+//hook menu and permission
+function uhs_multi_er_wait_time_init() {
+  $initialize = variable_get('multi_er_search_title', 'Our Facilities');
+  //the view admin page breaks if this is not set
+  drupal_add_js('var multi_er_list_display = "'.variable_get('multi_er_list_display', 'list').'";console.log("default display : "+multi_er_list_display);', array('type' => 'inline', 'scope' => 'footer','weight' => -1000));
+}
+function uhs_multi_er_wait_time_menu() {
+  $items = array();
+
+  $items['admin/config/services/er-multi-waittime-config'] = array(
+    'title' => 'ER Multi Waittime Config',
+    'description' => 'Configure ER Multi Waittime block parameters',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('uhs_multi_er_wait_time_admin_form'),
+    'access arguments' => array('administer er multi waittime'),
+    'type' => MENU_NORMAL_ITEM,
+  );
+
+  $items['ajax/er_multi_waittime'] = array(
+    'title' => '',
+    'description' => 'Ajax callback for waittime refresh',
+    'page callback' => 'er_multi_waittime_api',
+    'page arguments' => array(2,'ajax'),
+    'access arguments' => array('access content'),
+    'delivery callback' => '_json_deliver_page',
+    'type' => MENU_CALLBACK,
+  );
+  $items['billboard/er_multi_waittime'] = array(
+    'title' => '',
+    'description' => 'RSS feed for billboard',
+    'page callback' => 'er_multi_waittime_api',
+    'page arguments' => array(2,'billboard'),
+    'access arguments' => array('access content'),
+    'delivery callback' => '_xml_deliver_page',
+    'type' => MENU_CALLBACK,
+  );
+  //this allows the billboards to not have to update their target URL from the old module
+  $items['billboard/er_waittime'] = array(
+    'title' => '',
+    'description' => 'RSS feed for billboard',
+    'page callback' => 'er_multi_waittime_api',
+    'page arguments' => array(2,'billboard'),
+    'access arguments' => array('access content'),
+    'delivery callback' => '_xml_deliver_page',
+    'type' => MENU_CALLBACK,
+  );
+
+  return $items;
+}
+function uhs_multi_er_wait_time_permission() {
+  $permissions = array(
+    'administer er multi waittime' => array(
+      'title' => t('Administer ER Multi Waittime settings'),
+    ),
+  );
+  return $permissions;
+}
+
+//global configuration form
+function uhs_multi_er_wait_time_variable_info($options) {
+  $variable['multi_er_hide_threshold'] = array(
+    'title' => t('Hide the Facility Wait Time'),
+    'type' => 'number',
+  );
+  $variable['multi_er_search_intro'] = array(
+    'title' => t('Facility Search Introduction Copy'),
+    'type' => 'textarea',
+  );
+  return $variable;
+}
+function uhs_multi_er_wait_time_admin_form() {
+  global $user;
+  $form['multi_er_waittime_list'] = array(
+    '#type' => 'fieldset',
+    '#title' => 'ER Wait Times',
+    '#collapsed' => true,
+    '#collapsable' => true,
+    '#attached' => array(
+      'library' => array(
+        array('system', 'drupal.collapse'),
+      ),
+    ),
+    '#attributes' => array(
+      'class' => array('collapsible', 'collapsed')
+    ),
+  );
+  $form['multi_er_waittime_list']['waittimes'] = array(
+    '#markup' => views_embed_view('facilities', 'block_2')
+  );
+  $form['multi_er_waittime_settings'] = array(
+    '#type' => 'fieldset',
+    '#title' => 'Multi Wait Time',
+    '#collapsed' => true,
+    '#collapsable' => true,
+  );
+  $form['multi_er_waittime_settings']['multi_er_service_url'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Web Service URL'),
+    '#description' => t('The URL for the wait time web service.'),
+    '#default_value' => variable_get('multi_er_service_url', ''),
+    '#required' => TRUE,
+  );
+  $form['multi_er_waittime_settings']['multi_er_service_token'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Web Service Authorization Token'),
+    '#description' => t('The token for the wait time web service.'),
+    '#default_value' => variable_get('multi_er_service_token', ''),
+    '#required' => TRUE,
+    '#maxlength' => 300,
+  );
+  $form['multi_er_waittime_settings']['multi_er_hide_threshold'] = array(
+    '#type' => 'numberfield',
+    '#title' => t('Hide the Facility Wait Time'),
+    '#description' => t('Hide the wait time for any facility if it is greater than this value. Value is stored in minutes.'),
+    '#default_value' => variable_get('multi_er_hide_threshold', 15),
+  );
+  $form['multi_er_waittime_settings']['facility_page'] = array(
+    '#type' => 'fieldset',
+    '#title' => 'Facility Listing Page Configuration',
+    '#collapsed' => true,
+    '#collapsable' => true,
+    '#attached' => array(
+      'library' => array(
+        array('system', 'drupal.collapse'),
+      ),
+    ),
+    '#attributes' => array(
+      'class' => array('collapsible', 'collapsed')
+    ),
+  );
+  $form['multi_er_waittime_settings']['facility_page']['multi_er_list_display'] = array(
+    '#type' => 'radios',
+    '#title' => 'Default Format for List Display',
+    '#options' => array('map' => 'Map','list' => 'List'),
+    '#default_value' => variable_get('multi_er_list_display', 'list')
+  );
+  $form['multi_er_waittime_settings']['facility_page']['multi_er_legend_waittime_marker_desc'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Waittime Marker Description'),
+    '#description' => t('Displayed under the map on the facilities page.'),
+    '#default_value' => variable_get('multi_er_legend_waittime_marker_desc','Emergency room location current wait time'),
+    '#required' => TRUE,
+    '#maxlength' => 300,
+  );
+  $form['multi_er_waittime_settings']['facility_page']['multi_er_legend_nonwaittime_marker_desc'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Non Waittime Marker Description'),
+    '#description' => t('Also displayed under the map on the facilities page.'),
+    '#default_value' => variable_get('multi_er_legend_nonwaittime_marker_desc', 'Non-ER location, wait time not available'),
+    '#required' => TRUE,
+    '#maxlength' => 300,
+  );
+  $form['multi_er_waittime_settings']['facility_page']['multi_er_search_intro'] = array(
+    '#type' => 'text_format',
+    '#title' => t('Facility Search Intro Copy'),
+    '#description' => t('Enter a Introductory Text for the Facility Search page.'),
+    '#default_value' => variable_get('multi_er_search_intro', '')['value'],
+    '#required' => FALSE,
+  );
+  $form['multi_er_waittime_settings']['facility_page']['multi_er_search_title'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Facility Search Title'),
+    '#description' => t('Enter a Title for the Facility Search page.'),
+    '#default_value' => variable_get('multi_er_search_title', 'Our Facilities'),
+    '#required' => FALSE,
+  );
+  /*$form['multi_er_waittime_settings']['facility_page']['multi_er_search_url'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Facility Search URL'),
+    '#description' => t('Enter a URL String for the Facility Search page.'),
+    '#default_value' => variable_get('multi_er_search_url', ''),
+    '#required' => FALSE,
+  );*/
+  $form['multi_er_waittime_settings']['multi_er_sticky_disclaimer'] = array(
+    '#type' => 'text_format',
+    '#title' => t('Multi Widget Disclaimer'),
+    '#description' => t('Enter a disclaimer for Multi Sticky ER Wait Time Widget.'),
+    '#default_value' => variable_get('multi_er_sticky_disclaimer', '')['value'],
+    '#required' => FALSE,
+  );
+
+  return system_settings_form($form);
+}
+
+//api processing
+function er_multi_waittime_formatting($time = null, $format = null) {
+  $return = array();
+  switch ($format) {
+    case 'just_minutes':
+      $item['get_minutes'] = $time;
+      $return[] = $item;
+      break;
+    case 'waittime':
+      $item['get_minutes'] = $time . " min.";
+      $item['copy'] = "ER Wait Time";
+      $item['icon_class'] = "display_minutes";
+      $return[] = $item;
+      break;
+  }
+  return $return;
+}
+function er_multi_waittime_api($codes = null, $format = null) {
+  $return = '';
+  $codes_array = explode(',', $codes);
+  $waittime_items = _process_waittime($codes_array);
+  switch ($format) {
+    case 'just_minutes':
+      //this will only have one code
+      $return = array();
+      if (!empty($waittime_items)) {
+        foreach($waittime_items AS $waittime) {
+          if (!empty($waittime['waittime_minutes'])) {
+            $item['get_minutes'] = $waittime['waittime_minutes'];
+            $return[] = $item;
+          }
+        }
+      }
+      break;
+    case 'facility':
+      $dude= 1;
+
+      break;
+    case 'widget':
+      //this will only have one code
+      $return = array();
+      if (!empty($waittime_items)) {
+        foreach($waittime_items AS $waittime) {
+          if (!empty($waittime['waittime_minutes'])) {
+            $item['get_minutes'] = $waittime['waittime_minutes'] . " min.";
+            $item['icon_class'] = "display_minutes";
+            $return[] = $item;
+          }
+        }
+      }
+      break;
+    case 'billboard':
+      $xml = '<?xml version="1.0" encoding="UTF-8" ?><rss version="2.0"><channel><xhtml:meta xmlns:xhtml="http://www.w3.org/1999/xhtml" name="robots" content="noindex" /><title>ER Wait Time</title><description>RSS feed for ER wait time</description>';
+      foreach ($waittime_items as $item) {
+        $hospital_code = $item['facilityCode'];
+        $wait_time = $item['waittime_minutes'];
+        //format_xml_elements
+        $xml .= '<item><title>Hospital Code '.$hospital_code.'</title><description>' . $wait_time . ' Minutes</description><time>' . $wait_time . '</time></item>';
+      }
+      $xml .= '</channel></rss>';
+      $return = $xml;
+      break;
+    case 'ajax':
+      foreach ($waittime_items AS $item) {
+        if (!empty($item)) {
+          $ajax_array = array(
+            "display_minutes" => $item
+          );
+        }
+      }
+      $return = drupal_json_encode($ajax_array);
+      break;
+  }
+  return $return;
+}
+function _process_waittime($hospital_codes = null, $limit = null) {
+  $return = array();
+  $code_index = array();
+
+  if (empty($hospital_codes)) {
+    watchdog('er_waittime', "ER Wait Time API Error. Message : No Hospital Code.", array(), WATCHDOG_ERROR);
+    return false;
+  }
+
+  $service_url = variable_get('multi_er_service_url', 'https://api.uhsinc.com/erwaittime/api/waittime');
+  $service_token = variable_get('multi_er_service_token', '6hQrgARpDLEESHc9ekwbXjShyWTK9QUQEg3VX5tcsoT8Sf-c9WeKr-K99xeHDFYAptsEHaZRQogA9CkXWA6F2jMmPyNX6zCcqKjhVkbbHjbUNhjOhuSZfeBLIOzxQuiYyeiFgiZ_Wwkn65LChDmu2zJRNg5W1PP6FinyHUT6wcghxmufSpW_hYCvHHt-8YXFYiX0u2lx3MUPaQqOHuYBYdO28HQvrIXKsOjw_kDizWjB26ZQMpbBgDaeTiCZPwiNXQL_UA');
+
+  $curl = curl_init();
+  curl_setopt_array($curl, array(
+    CURLOPT_URL => $service_url . "?faccodes=" . implode(",", $hospital_codes),
+    CURLOPT_RETURNTRANSFER => true,
+    CURLOPT_ENCODING => "",
+    CURLOPT_MAXREDIRS => 10,
+    CURLOPT_TIMEOUT => 30,
+    CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+    CURLOPT_CUSTOMREQUEST => "GET",
+    CURLOPT_POSTFIELDS => "undefined=",
+    CURLOPT_HTTPHEADER => array(
+      "Authorization: Bearer ".$service_token,
+      "Content-Type: application/x-www-form-urlencoded",
+      "cache-control: no-cache"
+    ),
+  ));
+
+  $response = curl_exec($curl);
+  $err = curl_error($curl);
+  curl_close($curl);
+
+  if ($err) {
+    watchdog('er_waittime', "API request to UHS failed.  Message: " . $err, array(), WATCHDOG_ERROR);
+    return FALSE;
+  }
+
+  $result = drupal_json_decode($response);
+
+  if (!empty($result)) {
+    foreach($result AS $key => $row) {
+      if (!empty($row['waitTimeInSeconds'])) {
+        $row['waittime_minutes'] = ceil((int)$row['waitTimeInSeconds'] / 60);
+      } else if ($row['waitTimeInSeconds'] == "0") {
+        $row['waittime_minutes'] = 0;
+      }
+      $code_index[$row['facilityCode']] = $row;
+    }
+    foreach($hospital_codes AS $index => $hospitalcode) {
+      $hospital_codes[$index] = $code_index[$hospitalcode];
+    }
+    $return = $hospital_codes;
+  }
+
+  return $return;
+}
+function uhs_multi_er_wait_time_cron() {
+  $facilities = array();
+  $codes = array();
+  /// do I load all nodes and save them using normal drupal flow
+  /// or do I manipulate the db directly?
+  /// let's do both :)
+  $query = db_select('field_data_field_hospital_code', 'hc');
+  $query->leftJoin('field_data_field_wait_time_value', 'wt', 'hc.entity_id = wt.entity_id AND hc.revision_id = wt.revision_id');
+  $query->addField('hc', 'entity_id', 'id');
+  $query->addField('hc', 'revision_id', 'rev');
+  $query->addField('hc', 'field_hospital_code_value', 'code');
+  $query->addField('wt', 'field_wait_time_value_value', 'time');
+  $query->condition('hc.delta',0,'=')
+    ->condition('hc.deleted',0,'=')
+    ->condition('hc.language','und','=');
+  $result = $query->execute();
+  foreach ($result as $record) {
+    $facilities[] = (array)$record;
+    $codes[] = $record->code;
+  }
+  $codes = array_column($facilities, 'code');
+  //call api
+  $waittimes = _process_waittime($codes);
+  if (!empty($waittimes)) {
+    foreach ($waittimes AS $wt_index => $waittime) {
+      $captureTime = $waittime['dataCaptureDateTime'];
+      $facilities[$wt_index]['time'] = $waittime['waittime_minutes'];
+    }
+  }
+  //process return and update facilities time array
+  $success = 0;
+  if (!empty($facilities)) {
+    foreach ($facilities AS $item) {
+      try {
+        db_merge('field_data_field_wait_time_value')
+          ->key(array('entity_id' => $item['id'],'revision_id' => $item['rev']))
+          ->insertFields(array(
+            'field_wait_time_value_value' => $item['time'],
+            'entity_type' => 'paragraphs_item',
+            'bundle' => 'er_waittime',
+            'deleted' => 0,
+            'entity_id' => $item['id'],
+            'revision_id' => $item['rev'],
+            'language' => 'und',
+            'delta' => 0,
+            'field_wait_time_value_value' => $item['time'],
+          ))
+          ->updateFields(array(
+            'field_wait_time_value_value' => $item['time'],
+          ))
+          ->execute();
+        cache_clear_all('field:paragraphs_item:' . $item['id'], 'cache_field', TRUE);
+        $success++;
+      } catch (Throwable $e) {
+        watchdog("cron", "Fail to update or insert ER Wait Time for Each Facility : " . $item['id'] . ":" . $item['rev']);
+        watchdog("cron", $e);
+      }
+    }
+    $success_ratio = $success . ":" . count($waittimes);
+    watchdog("cron", "Update ER Wait Time for Each Facility : " . $success_ratio);
+  }
+}
+
+function process_shiz($dom) {
+  $html = '';
+  $domxpath = new DOMXPath($dom);
+  $dom_title = $domxpath->query("//h4");
+  foreach ($dom_title as $t) {
+    $address_array['title'] = trim($t->textContent, " \t\n\r");
+  }
+  $dom_street_address = $domxpath->query("//div[contains(@class, 'street-address')]");
+  foreach ($dom_street_address as $sa) {
+    $address_array['street_address'] = trim($sa->textContent, " \t\n\r");
+  }
+  $dom_locality = $domxpath->query("//span[contains(@class, 'locality')]");
+  foreach ($dom_locality as $l) {
+    $address_array['city'] = trim($l->textContent, " \t\n\r,");
+  }
+  $dom_region = $domxpath->query("//span[contains(@class, 'region')]");
+  foreach ($dom_region as $r) {
+    $address_array['state'] = trim($r->textContent, " \t\n\r");
+  }
+  $dom_postal_code = $domxpath->query("//span[contains(@class, 'postal-code')]");
+  foreach ($dom_postal_code as $pc) {
+    $address_array['postal_code'] = trim($pc->textContent, " \t\n\r");
+  }
+  $dom_phone = $domxpath->query("//span[contains(@class, 'value')]");
+  foreach ($dom_phone as $p) {
+    $address_array['phone'] = trim($p->textContent, " \t\n\r");
+  }
+  $html = theme('uhs_multi_er_wait_time_google_map_bubble', $address_array);
+  return $html;
+}
+//hook alter
+function uhs_multi_er_wait_time_gmap($action, &$vars) {
+  switch($action) {
+    case 'parse_macro':
+      $vars['mapstyles'] = array (
+      0 =>
+        array (
+          'elementType' => 'geometry',
+          'stylers' =>
+            array (
+              0 =>
+                array (
+                  'color' => '#ffffff',
+                ),
+            ),
+        ),
+      1 =>
+        array (
+          'elementType' => 'labels.icon',
+          'stylers' =>
+            array (
+              0 =>
+                array (
+                  'lightness' => 55,
+                ),
+              1 =>
+                array (
+                  'visibility' => 'simplified',
+                ),
+            ),
+        ),
+      2 =>
+        array (
+          'elementType' => 'labels.text.fill',
+          'stylers' =>
+            array (
+              0 =>
+                array (
+                  'color' => '#616161',
+                ),
+            ),
+        ),
+      3 =>
+        array (
+          'elementType' => 'labels.text.stroke',
+          'stylers' =>
+            array (
+              0 =>
+                array (
+                  'color' => '#ffffff',
+                ),
+            ),
+        ),
+      4 =>
+        array (
+          'featureType' => 'landscape',
+          'elementType' => 'geometry.fill',
+          'stylers' =>
+            array (
+              0 =>
+                array (
+                  'color' => '#ffffff',
+                ),
+            ),
+        ),
+      5 =>
+        array (
+          'featureType' => 'poi',
+          'elementType' => 'geometry',
+          'stylers' =>
+            array (
+              0 =>
+                array (
+                  'visibility' => 'off',
+                ),
+            ),
+        ),
+      6 =>
+        array (
+          'featureType' => 'poi',
+          'elementType' => 'labels',
+          'stylers' =>
+            array (
+              0 =>
+                array (
+                  'visibility' => 'off',
+                ),
+            ),
+        ),
+      7 =>
+        array (
+          'featureType' => 'poi.park',
+          'elementType' => 'geometry',
+          'stylers' =>
+            array (
+              0 =>
+                array (
+                  'visibility' => 'off',
+                ),
+            ),
+        ),
+      8 =>
+        array (
+          'featureType' => 'poi.park',
+          'elementType' => 'geometry.fill',
+          'stylers' =>
+            array (
+              0 =>
+                array (
+                  'visibility' => 'off',
+                ),
+            ),
+        ),
+      9 =>
+        array (
+          'featureType' => 'poi.park',
+          'elementType' => 'labels',
+          'stylers' =>
+            array (
+              0 =>
+                array (
+                  'visibility' => 'off',
+                ),
+            ),
+        ),
+      10 =>
+        array (
+          'featureType' => 'road',
+          'elementType' => 'geometry',
+          'stylers' =>
+            array (
+              0 =>
+                array (
+                  'color' => '#ffffff',
+                ),
+            ),
+        ),
+      11 =>
+        array (
+          'featureType' => 'road.arterial',
+          'elementType' => 'geometry.fill',
+          'stylers' =>
+            array (
+              0 =>
+                array (
+                  'color' => '#ececec',
+                ),
+            ),
+        ),
+      12 =>
+        array (
+          'featureType' => 'road.arterial',
+          'elementType' => 'labels.text.fill',
+          'stylers' =>
+            array (
+              0 =>
+                array (
+                  'color' => '#656565',
+                ),
+            ),
+        ),
+      13 =>
+        array (
+          'featureType' => 'road.highway',
+          'elementType' => 'geometry',
+          'stylers' =>
+            array (
+              0 =>
+                array (
+                  'color' => '#dadada',
+                ),
+            ),
+        ),
+      14 =>
+        array (
+          'featureType' => 'road.highway',
+          'elementType' => 'labels.text.fill',
+          'stylers' =>
+            array (
+              0 =>
+                array (
+                  'color' => '#656565',
+                ),
+            ),
+        ),
+      15 =>
+        array (
+          'featureType' => 'road.local',
+          'elementType' => 'geometry.fill',
+          'stylers' =>
+            array (
+              0 =>
+                array (
+                  'color' => '#ececec',
+                ),
+            ),
+        ),
+      16 =>
+        array (
+          'featureType' => 'road.local',
+          'elementType' => 'labels.text.fill',
+          'stylers' =>
+            array (
+              0 =>
+                array (
+                  'color' => '#656565',
+                ),
+            ),
+        ),
+      17 =>
+        array (
+          'featureType' => 'transit',
+          'elementType' => 'label',
+          'stylers' =>
+            array (
+              0 =>
+                array (
+                  'visibility' => 'off',
+                ),
+            ),
+        ),
+      18 =>
+        array (
+          'featureType' => 'transit.line',
+          'elementType' => 'geometry',
+          'stylers' =>
+            array (
+              0 =>
+                array (
+                  'visibility' => 'off',
+                ),
+            ),
+        ),
+      19 =>
+        array (
+          'featureType' => 'transit.station',
+          'elementType' => 'geometry',
+          'stylers' =>
+            array (
+              0 =>
+                array (
+                  'visibility' => 'off',
+                ),
+            ),
+        ),
+      20 =>
+        array (
+          'featureType' => 'water',
+          'stylers' =>
+            array (
+              0 =>
+                array (
+                  'color' => '#dde7f4',
+                ),
+            ),
+        ),
+      21 =>
+        array (
+          'featureType' => 'water',
+          'elementType' => 'geometry',
+          'stylers' =>
+            array (
+              0 =>
+                array (
+                  'color' => '#c9c9c9',
+                ),
+            ),
+        ),
+      22 =>
+        array (
+          'featureType' => 'water',
+          'elementType' => 'geometry.fill',
+          'stylers' =>
+            array (
+              0 =>
+                array (
+                  'color' => '#dde7f4',
+                ),
+            ),
+        ),
+      23 =>
+        array (
+          'featureType' => 'water',
+          'elementType' => 'labels.text.fill',
+          'stylers' =>
+            array (
+              0 =>
+                array (
+                  'color' => '#9e9e9e',
+                ),
+            ),
+        ),
+    );
+      break;
+    case 'pre_theme_map':
+      $markers = $vars['markers'];
+      $theme_color = _get_marker_color();//default is purple
+      if (!empty($markers)) {
+        foreach($markers AS $key => $value) {
+          $return = [];
+          $address_array = [];
+          $dom = new DOMDocument;
+          if (!empty($value['text'])) {
+            $dom->loadHTML($value['text']);
+            $dom->preserveWhiteSpace = false;
+            $marker_name = _get_site_directory() . $theme_color;
+            if ($value['markername'] == 'drupal') {
+              //process Google Map Component Address Popup
+              $html = process_shiz($dom);
+              $html = str_replace('gmap-popup', 'gmap-popup-address', $html);
+              $return[] = '<div class="gmap-popup-content">' . $html . '</div>';
+            } else if ($value['markername'] == 'No Wait Time') {
+              $vars['markers'][$key]['markername'] = $marker_name;
+              $remove_waittime = $dom->saveHTML($dom);
+              $html = str_replace('gmap-popup', 'gmap-popup-address', $remove_waittime);
+              $return[] = '<div class="gmap-popup-content">' . $html . '</div>';
+            } else {
+              $waittime_class = 'paragraphs-item-er-wait-time';
+              $waittime_popup_class = ['gmap-popup-waittime'];
+              if (!empty($theme_color)) {
+                $waittime_popup_class[] = 'gmap-popup-waittime_' . $theme_color;
+              } else {
+                $waittime_popup_class[] = 'gmap-popup-waittime__purple';
+              }
+              $poppup_div = $dom->getElementsByTagName('div');
+              $poppup_nodevalue = $poppup_div->item(0);
+              $poppup_html = $dom->saveHTML($poppup_nodevalue);
+              $poppup_inner_divs = $poppup_nodevalue->getElementsByTagName('div');
+              $erwaittime = $poppup_inner_divs->item(0);
+              $erwaittime_html = $dom->saveHTML($erwaittime);
+              $remove_waittime = $dom->saveHTML($dom);
+              $poppup_inner_html = str_replace($erwaittime_html, '', $remove_waittime);
+              $html = str_replace('gmap-popup', 'gmap-popup-address', $poppup_inner_html);
+              $return[] = '<div class="gmap-popup-content">' . $html . '</div>';
+              $erwaittime__display = strip_tags($erwaittime_html);
+              $erwaittime__display = trim(preg_replace('/\s\s+/', ' ', $erwaittime__display));
+              if ($erwaittime__display != '') {
+                $return[] = '<div class="' . implode(" ", $waittime_popup_class) . '">' . str_replace('class="display_minutes"', 'class="popup_display_minutes"', $erwaittime_html) . "</div>";
+              }
+            }
+            $vars['markers'][$key]['text'] = '<div class="gmap-popup">' . implode('', $return) . '</div>';
+
+            if (isset($value['opts']['label'])) {
+              $label = $value['opts']['label'];
+              $label = preg_replace('/\n/', '', $label);
+              $label = preg_replace('/\s/', '', $label);
+              $vars['markers'][$key]['opts']['label'] = $label;
+            } else {
+              $vars['markers'][$key]['markername'] = $marker_name;
+              //$label = "Wait Time";
+              //drupal_set_message("hd.mwc", "No Opts in Markers.");
+            }
+
+          }
+        }
+      }
+      break;
+  }
+}
+function _get_inner_html( $node ) {
+  $innerHTML= '';
+  $children = $node->childNodes;
+	foreach ($children as $child) {
+    $innerHTML .= $child->ownerDocument->saveXML( $child );
+	}
+	return $innerHTML;
+}
+function uhs_multi_er_wait_time_form_alter(&$form, &$form_state, $form_id) {
+  switch ($form_id) {
+    case 'views_exposed_form':
+      $view = $form_state['view'];
+      if ($view->name == 'facilities' && $view->current_display == 'panel_pane_1') {
+        drupal_add_js('var multi_er_list_display = "'.variable_get('multi_er_list_display', 'list').'";console.log("default display : "+multi_er_list_display);', array('type' => 'inline', 'scope' => 'footer','weight' => -1000));
+        drupal_add_js(drupal_get_path('module','uhs_multi_er_wait_time').'/js/uhs_multi_er_wait_time.js',array('type' => 'file','scope' => 'footer'));
+        $form['distance']['search_units']['#type'] = "hidden";
+        $form['distance']['search_distance']['#type'] = 'select';
+        $form['distance']['search_distance']['#options'] = array("5"=>"5 miles","10"=>"10 miles","25"=>"25 miles","50"=>"50 miles","100"=>"100 miles");
+        $form['distance']['search_distance'][LANGUAGE_NONE]['#default_value'] = 100;
+        //$form_state['input']['distance']['search_distance'] = "5";
+      }
+      break;
+    case 'facility_node_form':
+      global $user;
+      $set_waittime_disabled = TRUE;
+      if ($user->uid == 1) {
+        $set_waittime_disabled = FALSE;
+      }
+      if (!empty($form['field_er_wait_time']['und'][0]['field_wait_time_value']['und'][0]) && $set_waittime_disabled) {
+        $form['field_er_wait_time']['und'][0]['field_wait_time_value']['und'][0]['value']['#disabled'] = true;
+        $form['field_er_wait_time']['und'][0]['field_wait_time_value']['und'][0]['value']['#value'] = $form['field_er_wait_time']['und'][0]['field_wait_time_value']['und'][0]['value']['#default_value'];
+      }
+      if (!empty($form['field_ctas'])) {
+        foreach ($form['field_ctas']['und'] AS $key => $value) {
+          if (is_numeric($key)) {
+            unset($form['field_ctas']['und'][$key]['field_blurb']);
+          }
+        }
+      }
+      if (!empty($form['field_helpful_links'])) {
+        foreach ($form['field_helpful_links']['und'] AS $key => $value) {
+          if (is_numeric($key)) {
+            unset($form['field_helpful_links']['und'][$key]['field_display_rule']);
+          }
+        }
+      }
+      if (!empty($form['field_address'])) {
+        //$form['field_address']['#type'] = 'fieldset';
+        //$form['field_address']['collapsible'] = true;
+        //$form['field_address']['#attributes']['class'][] = 'collapsible';
+        /*$form['field_address']['#attached'] = array(
+          'library' => array (
+            array('system', 'drupal.collapse'),
+          )
+        );*/
+      }
+      break;
+  }
+}
+function uhs_multi_er_wait_time_views_query_alter(&$view, &$query) {
+  if ($view->name == 'facilities') {
+    if ($view->current_display == 'block_1') {
+      if (isset($query->orderby)) {
+        $array_sort = [
+          'field' => 'paragraphs_item_field_data_field_er_wait_time__field_data_field_wait_time_value.field_wait_time_value_value',
+          'direction' => 'ASC',
+        ];
+        array_unshift($query->orderby, $array_sort);
+      }
+      if (isset($query->where[0])) {
+        if (strstr($query->where[0]['conditions'][0]['field'], 'field_data_field_wait_time_value_field_wait_time_value_value')) {
+          $query->where[0]['conditions'][0]['field'] = str_replace("=", "<=", $query->where[0]['conditions'][0]['field']);
+        }
+      }
+    }
+  }
+}
+/*function uhs_multi_er_wait_time_preprocess_field(&$variables) {
+  if ($variables['element']['#field_name'] == 'field_ctas') {
+    foreach ($variables['element']['#items'] AS $key => $item) {
+      $paragraph = entity_load('paragraphs_item', array($item['value']));
+      if (!empty($paragraph[$item['value']]->field_display_rule)) {
+        $value = $paragraph[$item['value']]->field_display_rule['und'][0]['value'];
+        if ($value == 'detail') {
+          unset($variables['element']['#items'][$key]);
+          unset($variables['element']['#object']->field_ctas['und'][$key]);
+        }
+      }
+    }
+  }
+}*/
+
+//hook block
+function uhs_multi_er_wait_time_block_info() {
+  $blocks = array();
+  $blocks['multi-er-wt-search-intro-copy'] = array(
+    'info' => t('Facility Search Intro Copy Block'),
+    'cache' => DRUPAL_NO_CACHE,
+  );
+  $blocks['multi-er-wt-map-legend'] = array(
+    'info' => t('Facility Map Legend Block'),
+    'cache' => DRUPAL_NO_CACHE,
+  );
+  $blocks['showme'] = array(
+    'info' => t('WTF'),
+    'cache' => DRUPAL_NO_CACHE,
+  );
+  $blocks['multi-er-wt-search-tab'] = array(
+    'info' => t('Multi ER Waittime Facility Search Tabs'),
+    'cache' => DRUPAL_NO_CACHE,
+  );
+  return $blocks;
+}
+function uhs_multi_er_wait_time_block_view($delta = '') {
+  $block = array();
+  switch ($delta) {
+    case 'multi-er-wt-search-intro-copy':
+      $content = "";
+      $intro = variable_get('multi_er_search_intro', '');
+      if (!empty($intro)) {
+        $content = $intro['value'];
+      }
+      $block = array(
+        'subject' => '',
+        'content' => $content,
+      );
+      break;
+    case 'multi-er-wt-map-legend':
+      $module_path = drupal_get_path('module', 'uhs_multi_er_wait_time');
+      $waittime_marker_desc = variable_get('multi_er_legend_waittime_marker_desc','Emergency room location current wait time');
+      $nonwaittime_marker_desc = variable_get('multi_er_legend_nonwaittime_marker_desc','Non-ER location, wait time not available');
+      $marker = "purple_waittime_marker.png";//wait time marker
+      $marker_color = _get_marker_color();
+      if (isset($marker_color)) {
+        if ($marker_color === "_orange") {
+          $marker = "orange_waittime_marker.png";
+        } elseif ($marker_color === "_blue") {
+          $marker = "blue_waittime_marker.png";
+        }
+      }
+      drupal_add_css($module_path."/css/uhs_multi_er_wait_time.css");
+      if ($site_directory = _get_site_directory()) {
+        $block = array(
+          'subject' => '',
+          'content' => theme('uhs_multi_er_wait_time_map_legend', array(
+            'waittime_marker' => $marker,
+            'waittime_marker_desc' => $waittime_marker_desc,
+            'nonwaittime_marker_desc' => $nonwaittime_marker_desc,
+            'module_path' => $module_path,
+            'site_directory' => $site_directory._get_marker_color())
+          ),
+        );
+      }
+      break;
+    case 'multi-er-wt-search-tab':
+      $block = array(
+        'subject' => '',
+        'content' => theme('uhs_multi_er_wait_time_search_tab'),
+      );
+      break;
+  }
+  return $block;
+}
+
+//hook field formatter
+function uhs_multi_er_wait_time_field_formatter_info() {
+  $info = array(
+    'cta_node' => array(
+      'label' => t('CTAs in Node Display'),
+      'field types' => array('paragraphs'),
+      'description' => t('This will display any Link Cards associated to the CTA field for a Facility. i.e. Learn More'),
+    ),
+    'cta_node_map' => array(
+      'label' => t('CTAs in Map Display'),
+      'field types' => array('paragraphs'),
+      'description' => t('This will display any Link Cards associated to the CTA field for a Facility. i.e. Learn More'),
+    ),
+    'cta_sticky_widget' => array(
+      'label' => t('CTAs in Sticky Widget'),
+      'field types' => array('paragraphs'),
+      'description' => t('This will display any Link Cards associated to the CTA field for a Facility. i.e. Learn More'),
+    ),
+    'waittime_marker' => array(
+      'label' => t('ER Waittime Marker'),
+      'field types' => array('paragraphs','text','number_integer'),
+      'description' => t('This will display the ER Wait Time Marker for a Facility.'),
+    ),
+    'waittime_admin' => array(
+      'label' => t('ER Waittime Admin'),
+      'field types' => array('paragraphs','text','number_integer'),
+      'description' => t('This will display the ER Wait Time for a Facility and format for our Admin design. which is really just the teaser.'),
+    ),
+    'waittime_teaser_display' => array(
+      'label' => t('ER Waittime Teaser'),
+      'field types' => array('paragraphs','text','number_integer'),
+      'description' => t('This will display the ER Wait Time for a Facility and format for our Teaser design.'),
+    ),
+    'waittime_detail_display' => array(
+      'label' => t('ER Waittime Detail'),
+      'field types' => array('paragraphs','text','number_integer'),
+      'description' => t('This will display the ER Wait Time for a Facility and format for our Detail design.'),
+    ),
+    'doc_asap_display' => array(
+      'label' => t('ER Reserve Link Display'),
+      'field types' => array('text'),
+      'description' => t('This will display the ER Reserve Button for a Facility if available.'),
+    ),
+    'directions' => array(
+      'label' => t('Directions'),
+      'field types' => array('list_boolean'),
+      'description' => t('Display a directions link using the address field of the currently selected content.'),
+    ),
+    'er_wait_time' => array(
+      'label' => t('ER Wait Time'),
+      'field types' => array('text','number_integer'),
+      'description' => t('Display the ER Wait Time for a Facility.'),
+    ),
+    'er_cta_link' => array(
+      'label' => t('Facility CTA Formating for List'),
+      'field types' => array('link_field'),
+      'description' => t('Display the ER Wait Time CTA Link for a Facility.'),
+    ),
+  );
+  return $info;
+}
+function uhs_multi_er_wait_time_field_formatter_view($entity_type, $entity, $field, $instance, $langcode, $items, $display) {
+  $element = array();
+  $facility = "blank";
+  if (!empty($entity->field_name)) {
+    $field_name = $entity->field_name;
+  }
+  $hostEntity = "";
+  $page_display = "detail";
+  if (method_exists($entity,'hostEntity')) {
+    $hostEntity = $entity->hostEntity();
+    if (!empty($hostEntity->view)) {
+      $page_display = "list";
+    }
+    $facility = str_replace('"', '\'', $hostEntity->title);
+    $entity_id = $hostEntity->nid;
+  } else {
+    if (isset($entity->view)) {
+      switch($entity->view->current_display) {
+        case 'panel_pane_1':
+          $page_display = 'map';
+          break;
+        default:
+          $page_display = 'list';
+          break;
+      }
+    }
+    if (!empty($entity->title)) {
+      $facility = str_replace('"', '\'', $entity->title);
+    }
+    $entity_id = $entity->nid;
+  }
+  //the same widget shows buttons on different pages
+  switch ($page_display) {
+    case 'list':
+      $gtm_event = "listButton";
+      break;
+    case 'detail':
+      $gtm_event = "erButtonclick";
+      break;
+    case 'bubble'://doesn't work
+      //hacked marker.js to make this happen
+      $gtm_event = "erMap";
+      break;
+  }
+
+  switch ($display['type']) {
+    case 'waittime_marker':
+      if ($marker = _get_site_directory()._get_marker_color()) {
+        if (!empty($entity->field_wait_time_value['und'])) {
+          $waittime = $entity->field_wait_time_value['und'][0]['value'];
+        }
+        if (isset($waittime) && $waittime <= variable_get('multi_er_hide_threshold', 15) && $waittime >= 0) {
+          $marker = "purple_waittime_marker";//wait time marker
+          $marker_color = _get_marker_color();
+          if (isset($marker_color)) {
+            if ($marker_color === "_orange") {
+              $marker = "orange_waittime_marker";
+            } elseif ($marker_color === "_blue") {
+              $marker = "blue_waittime_marker";
+            }
+          }
+        }
+        $element = array(
+          '#theme' => 'uhs_multi_er_wait_time',
+          '#waittime' => $marker,
+        );
+      }
+      break;
+    case 'waittime_admin':
+      if (!empty($entity->field_wait_time_value['und'])) {
+        $waittime = $entity->field_wait_time_value['und'][0]['value'];
+      }
+      if (isset($waittime)) {
+        //instead of running this if, create a function to process the element
+        $wait_array = er_multi_waittime_formatting($waittime,'just_minutes');
+        $element = array(
+          '#theme' => 'uhs_multi_er_wait_time',
+          '#waittime' => $wait_array[0]['get_minutes'],
+        );
+      }
+      break;
+    case 'er_wait_time'://bubble
+      unset($waittime);
+      if (!empty($entity->field_wait_time_value['und'])) {
+        $waittime = $entity->field_wait_time_value['und'][0]['value'];
+      }
+      if (isset($waittime) && $waittime <= variable_get('multi_er_hide_threshold', 15) && $waittime >= 0) {
+        //instead of running this if, create a function to process the element
+        $wait_array = er_multi_waittime_formatting($waittime,'just_minutes');
+        $bubble_output = $wait_array[0]['get_minutes'];
+        $element = array(
+          '#theme' => 'uhs_multi_er_wait_time',
+          '#waittime' => $bubble_output,
+        );
+      }
+      break;
+    case 'directions':
+      if (!empty($hostEntity->field_address['und'])) {
+        $address_object = $hostEntity->field_address['und'][0];
+        $address_array = array();
+        $fields = array('street','additional','city','province','postal_code');
+        if (!empty($address_object)) {
+          foreach($fields AS $field) {
+            if (!empty($address_object[$field])) {
+              $address_array[] = $address_object[$field];
+            }
+          }
+        };
+        if (!empty($address_array)) {
+          $address = implode("+",$address_array);
+          $element = array(
+            '#theme' => 'uhs_multi_er_directions',
+            '#address' => $address,
+            '#facility' => $facility,
+            '#gtm_event' => $gtm_event,
+            '#link_classes' => array("btn--primary", "directions", "gtm-link")
+          );
+        }
+      }
+      break;
+    case 'doc_asap_display':
+      if (!empty($entity->field_doc_asap_code['und'])) {
+        $er_code = $entity->field_doc_asap_code['und'][0]['value'];
+        if (!empty($er_code)) {
+          drupal_add_css('//docasap.com/l_css/white-label.css',array('type' => 'external'));
+          drupal_add_css('//docasap.com/l_css/wl_popup_38.css',array('type' => 'external'));
+          drupal_add_js('//docasap.com/l_js/white-label.js', array('type' => 'external', 'scope' => 'footer'));
+          drupal_add_js('//docasap.com/l_js/environment.js', array('type' => 'external', 'scope' => 'footer'));
+          $element = array(
+            '#theme' => 'uhs_multi_er_reserve_button',
+            '#er_code' => $er_code,
+            '#facility' => $facility,
+            '#gtm_event' => $gtm_event,
+          );
+        }
+      }
+      break;
+    case 'waittime_teaser_display':
+    case 'waittime_detail_display':
+      if (!empty($entity->field_er_wait_time['und'])) {
+        $er_waittime = entity_load('paragraphs_item', array($entity->field_er_wait_time['und'][0]['value']));
+        if (count($er_waittime) == 1) {
+          $wait_data = array_shift($er_waittime);
+          if (!empty($wait_data->field_wait_time_value['und'])) {
+            $waittime = $wait_data->field_wait_time_value['und'][0]['value'];
+          }
+        }
+      } else if (!empty($entity->field_wait_time_value['und'])) {
+        $waittime = $entity->field_wait_time_value['und'][0]['value'];
+      }
+      if (isset($waittime) && $waittime <= variable_get('multi_er_hide_threshold', 15) && $waittime >= 0) {
+        //instead of running this if, create a function to process the element
+        $wait_array = er_multi_waittime_formatting($waittime,'waittime');
+        $theme_template = "uhs_multi_er_wait_time_teaser_waittime";
+        if ($display['type'] == 'waittime_detail_display') {
+          $theme_template = "uhs_multi_er_wait_time_detail_waittime";
+        }
+        if (!empty($wait_array) && !empty($entity_id)) {
+          $element = array(
+            '#theme' => $theme_template,
+            '#href' => "/".drupal_get_path_alias('node/'.$entity_id),
+            '#minutes' => $wait_array[0]['get_minutes'],
+            '#copy' => $wait_array[0]['copy'],
+            '#class' => $wait_array[0]['icon_class'],
+            '#facility' => $facility,
+          );
+        }
+      }
+      break;
+    case 'cta_sticky_widget':
+      foreach ($items as $delta => $item) {
+        $hide_this_item = FALSE;
+        $cta = entity_load('paragraphs_item', array($item['value']));
+        $cta_item = array_shift($cta);
+        //grab the first link card
+        if ($cta_item->bundle == "link_card") {
+          if (!empty($cta_item->field_display_rule['und'])) {
+            foreach($cta_item->field_display_rule['und'] AS $key => $value) {
+              if ($value['value'] == 'sticky_widget') {
+                $hide_this_item = TRUE;
+              }
+            }
+          }
+          if (!$hide_this_item) {
+            if (empty($cta_item->field_link['und'][0]['attributes'])) {
+              $attributes = array();
+            } else {
+              $attributes = $cta_item->field_link['und'][0]['attributes'];
+            }
+            $element[] = array(
+              '#theme' => 'uhs_multi_er_wait_time_cta_sticky_widget',
+              '#title' => $cta_item->field_link['und'][0]['title'],
+              '#anchor' => '',
+              '#url' => $cta_item->field_link['und'][0]['url'],
+              '#attributes' => $attributes,
+              '#facility' => $facility,
+            );
+            break;
+          }
+        }
+      }
+      //hard code the map link on this display
+      array_unshift($element, array(
+          '#theme' => 'uhs_multi_er_wait_time_cta_sticky_widget',
+          '#title' => 'View Map',
+          '#anchor' => 'content_top',//'map_anchor',
+          '#url' => drupal_get_path_alias('node/'.$entity->nid),
+          '#attributes' => array("target"=>"_self"),
+          '#facility' => $facility,
+        )
+      );
+      break;
+    case 'cta_node_map':
+    case 'cta_node':
+      if ($display['type'] == 'cta_node_map') {
+        $page_display = 'map';
+      }
+      foreach ($items as $delta => $item) {
+        $hide_this_item = FALSE;
+        $cta = entity_load('paragraphs_item', array($item['value']));
+        $cta_item = array_shift($cta);
+        if (!empty($cta_item->field_display_rule['und'])) {
+          foreach($cta_item->field_display_rule['und'] AS $key => $value) {
+            if ($value['value'] == $page_display) {
+              $hide_this_item = TRUE;
+            }
+          }
+        }
+        if (!$hide_this_item) {
+          $link_classes = array("gtm-link");
+          switch ($cta_item->bundle) {
+            case 'directions':
+              $link_classes[] = "directions";
+              if ($page_display != 'map') {
+                $link_classes[] = "btn--primary";
+              }
+              if (!empty($entity->field_address['und'])) {
+                $address_object = $entity->field_address['und'][0];
+                $address_array = array();
+                $fields = array('street','additional','city','province','postal_code');
+                if (!empty($address_object)) {
+                  foreach($fields AS $field) {
+                    if (!empty($address_object[$field])) {
+                      $address_array[] = $address_object[$field];
+                    }
+                  }
+                };
+                if (!empty($address_array)) {
+                  $address = implode("+",$address_array);
+                  $element[$delta] = array(
+                    '#theme' => 'uhs_multi_er_directions',
+                    '#address' => $address,
+                    '#facility' => $facility,
+                    '#gtm_event' => $gtm_event,
+                    '#link_classes' => $link_classes
+                  );
+                }
+              }
+              break;
+            case 'doc_asap_display':
+              if (!empty($entity->field_doc_asap_code['und'])) {
+                $er_code = $entity->field_doc_asap_code['und'][0]['value'];
+                if (!empty($er_code)) {
+                  drupal_add_css('//docasap.com/l_css/white-label.css',array('type' => 'external'));
+                  drupal_add_css('//docasap.com/l_css/wl_popup_38.css',array('type' => 'external'));
+                  drupal_add_js('//docasap.com/l_js/white-label.js', array('type' => 'external', 'scope' => 'footer'));
+                  drupal_add_js('//docasap.com/l_js/environment.js', array('type' => 'external', 'scope' => 'footer'));
+                  $element[$delta] = array(
+                    '#theme' => 'uhs_multi_er_reserve_button',
+                    '#er_code' => $er_code,
+                    '#facility' => $facility,
+                    '#gtm_event' => $gtm_event,
+                  );
+                }
+              }
+              break;
+            case 'link_card':
+              if ($page_display != 'map') {
+                $link_classes[] = "btn--primary";
+              }
+              $element[$delta] = array(
+                '#theme' => 'uhs_multi_er_wait_time_cta_link',
+                '#title' => $cta_item->field_link['und'][0]['title'],
+                '#anchor' => '',
+                '#url' => $cta_item->field_link['und'][0]['url'],
+                '#facility' => $facility,
+                '#gtm_event' => $gtm_event,
+                '#link_classes' => $link_classes
+              );
+              break;
+          }
+
+        }
+      }
+      $element = array_values($element);
+      break;
+    case 'er_cta_link':
+      switch ($field_name) {
+        case 'field_ctas':
+          $link_classes = array("gtm-link", "btn--primary");
+          break;
+        case 'field_helpful_links':
+          $link_classes = array("gtm-link");
+          break;
+      }
+      $target = "_self";
+      $hide_this_cta = FALSE;
+      if (!empty($entity->field_display_rule['und'])) {
+        //there are display rules
+        //$page_display
+        foreach($entity->field_display_rule['und'] AS $key => $value) {
+          if ($value['value'] == $page_display) {
+            $hide_this_cta = TRUE;
+          }
+        }
+      }
+      if(!empty($entity->field_link['und'][0]['attributes']['target'])) {
+        $target = $entity->field_link['und'][0]['attributes']['target'];
+      }
+      //if (!$hide_this_cta) {
+      $element = array(
+        '#theme' => 'uhs_multi_er_wait_time_cta_link',
+        '#url' => $entity->field_link['und'][0]['url'],
+        '#title' => $entity->field_link['und'][0]['title'],
+        '#target' => $target,
+        '#html' => $entity->field_link['und'][0]['html'],
+        '#facility' => $facility,
+        '#gtm_event' => $gtm_event,
+        '#link_classes' => $link_classes,
+        '#display_rule' => 'dude'
+      );
+      //}
+      break;
+  }
+  if (!empty($element)) {
+    return $element;
+  }
+  return false;
+}
+
+//hook theme
+function uhs_multi_er_wait_time_theme() {
+  return array(
+    'uhs_multi_er_wait_time_map_legend' => array(
+      'template' => 'templates/uhs_multi_er_wait_time_map_legend',
+      'variables' => array(
+        'waittime_marker' => NULL,
+        'module_path' => NULL,
+        'site_directory' => NULL,
+        'nonwaittime_marker_desc' => NULL,
+        'waittime_marker_desc' => NULL,
+      ),
+    ),
+    'uhs_multi_er_wait_time_google_map_bubble' => array(
+      'template' => 'templates/uhs_multi_er_wait_time_google_map_bubble',
+      'variables' => array(
+        'title' => NULL,
+        'street_address' => NULL,
+        'city' => NULL,
+        'state' => NULL,
+        'postal_code' => NULL,
+      ),
+    ),
+    'uhs_multi_er_wait_time_search_tab' => array(
+      'template' => 'templates/uhs_multi_er_wait_time_search_tab',
+    ),
+    'uhs_multi_er_wait_time_cta_sticky_widget' => array(
+      'template' => 'templates/uhs_multi_er_wait_time_cta_sticky_widget',
+      'variables' => array(
+        'title' => NULL,
+        'url' => NULL,
+        'anchor' => NULL,
+        'attributes' => NULL,
+        'facility' => NULL,
+      ),
+    ),
+    'uhs_multi_er_wait_time_teaser_waittime' => array(
+      'template' => 'templates/uhs_multi_er_wait_time_teaser_waittime',
+      'variables' => array(
+        'href' => NULL,
+        'minutes' => NULL,
+        'class' => NULL,
+        'facility' => NULL,
+      ),
+    ),
+    'uhs_multi_er_wait_time_detail_waittime' => array(
+      'template' => 'templates/uhs_multi_er_wait_time_detail_waittime',
+      'variables' => array(
+        'copy' => NULL,
+        'minutes' => NULL,
+        'class' => NULL,
+        'facility' => NULL,
+      ),
+    ),
+    'uhs_multi_er_reserve_button' => array(
+      'template' => 'templates/uhs_multi_er_reserve_button',
+      'variables' => array(
+        'er_code' => NULL,
+        'facility' => NULL,
+        'gtm_event' => NULL,
+      ),
+    ),
+    'uhs_multi_er_directions' => array(
+      'template' => 'templates/uhs_multi_er_directions',
+      'variables' => array(
+        'address' => NULL,
+        'facility' => NULL,
+        'gtm_event' => NULL,
+        'link_classes' => NULL,
+      ),
+    ),
+    'uhs_multi_er_wait_time' => array(
+      'template' => 'templates/uhs_multi_er_wait_time',
+      'variables' => array(
+        'waittime' => NULL,
+      ),
+    ),
+    'uhs_multi_er_wait_time_cta_link' => array(
+      'template' => 'templates/uhs_multi_er_wait_time_cta_link',
+      'variables' => array(
+        'url' => NULL,
+        'title' => NULL,
+        'target' => NULL,
+        'html' => NULL,
+        'facility' => NULL,
+        'gtm_event' => NULL,
+        'link_classes' => NULL,
+      ),
+    ),
+  );
+}
+
+//callback function
+function _json_deliver_page($page_callback_result) {
+  drupal_add_http_header('Content-Type', 'application/json');
+  print $page_callback_result;
+}
+function _xml_deliver_page($page_callback_result) {
+  drupal_add_http_header('Content-Type', 'application/rss+xml');
+  print $page_callback_result;
+}
+
+//custom processing functions
+function _get_site_directory() {
+  $directory = conf_path();
+  if (!empty($directory)) {
+    $needles = [
+      "sites/",
+      ".com",
+      ".net"
+    ];
+    $replacements = [
+      "","",""
+    ];
+    $directory = str_replace($needles,$replacements,$directory);
+  } else {
+    return false;
+  }
+  return $directory;//default marker
+}
+function _get_marker_color() {
+  $marker_color = "_purple";
+  $marker_colors = array('null','_blue', '_purple', '_orange');
+  $theme_color_index = theme_get_setting('theme_color_picker');
+  //the index options are 1 (blue) and 2 (purple) and 3 (orange)
+  //purple is the default
+  //markers are defined in the custom.ini file
+  if (!empty($theme_color_index)) {
+    if (!empty($marker_colors[$theme_color_index])) {
+      $marker_color = $marker_colors[$theme_color_index];
+    }
+  }
+  return $marker_color;
+}
+
+//tokens
+function uhs_multi_er_wait_time_token_info() {
+  $info['types']['waittime'] = array( // define main group
+    'name' => t('ER Multi Wait Time Tokens'),
+    'description' => t('Custom Group'),
+  );
+  $info['tokens']['waittime']['facility-search-title'] = array(
+    'name' => t('Facility Search Page Title'),
+    'description' => t('Customize the Page title for the page search'),
+  );
+  $info['tokens']['waittime']['facility-search-url'] = array(
+    'name' => t('Facility Search Page URL'),
+    'description' => t('Customize the Page URL for the page search'),
+  );
+
+  return $info;
+}
+function uhs_multi_er_wait_time_tokens($type, $tokens, array $data = array(), array $options = array()) {
+  $replacements = array();
+  if ($type == 'waittime') {
+    foreach ($tokens as $name => $original) {
+      switch ($name) {
+        case 'facility-search-title':
+          $replacements[$original] = variable_get('multi_er_search_title', 'Our Facilities'); // get first letter of the title here
+          break;
+        case 'facility-search-url':
+          $replacements[$original] = variable_get('multi_er_search_url', 'our-facilities'); // get first letter of the title here
+          break;
+      }
+    }
+  }
+  return $replacements;
+}
+function uhs_multi_er_wait_time_tokens_alter(&$replacements,  $context){
+  if(isset($context['data']['entity']->type)){
+    if($context['data']['entity']->type == 'waittime'){
+      if(isset($replacements['[node:field_term]'])){
+        $term = $context['data']['entity']->field_term['und']['0']['tid'];
+
+        global $language;
+        $term = taxonomy_term_load($term );
+        $term = i18n_taxonomy_term_name($term,$language->language);
+        $replacements['[node:field_term]']  = check_plain($term);
+      }
+    }
+  }
+}

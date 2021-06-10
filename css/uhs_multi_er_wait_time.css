@@ -1,0 +1,27 @@
+ul.waittime_map_legend {
+  padding:0;
+  margin:20px 0;
+}
+ul.waittime_map_legend li {
+  float: left;
+  width: 250px;
+  display: block;
+  list-style: none;
+}
+ul.waittime_map_legend li img {
+  float:left;
+  padding-right:10px;
+}
+.gm-ui-hover-effect {
+  background: url('../images/x-mark.png') no-repeat !important;
+  top:0 !important;
+  right:0 !important;
+  margin: 5px !important;
+  width:16px !important;
+  height:16px !important;
+  -webkit-filter: drop-shadow(2px 2px 2px #222);
+  filter: drop-shadow(2px 2px 2px #222);
+}
+.gm-ui-hover-effect img {
+  display:none !important;
+}
